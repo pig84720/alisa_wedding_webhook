@@ -44,17 +44,13 @@ async def handle_church(line_bot_api: AsyncMessagingApi, reply_token: str) -> No
             await _reply_error(line_bot_api, reply_token)
             return
 
-        # 每張圖片點擊後：有地圖連結就導到地圖，否則開啟圖片本身
-        def make_action(url: str) -> URIAction:
-            return URIAction(
-                label="查看地圖",        # 最多 20 字
-                uri=map_url if map_url else url,
-            )
-
         columns = [
             ImageCarouselColumn(
                 image_url=url,
-                action=make_action(url),
+                action=URIAction(
+                    label="查看圖片",
+                    uri=url,
+                ),
             )
             for url in image_urls
         ]
