@@ -154,16 +154,3 @@ async def _dispatch_message(event: MessageEvent):
 async def health_check():
     """健康檢查端點"""
     return {"status": "healthy"}
-
-
-@app.get("/debug/seats")
-async def debug_seats():
-    """臨時 debug 端點：確認 Firestore guests collection 是否可讀"""
-    from db.firestore import get_db, COLLECTION_SEATS
-    db = get_db()
-    seats_docs = db.collection(COLLECTION_SEATS).stream()
-    names = []
-    async for doc in seats_docs:
-        data = doc.to_dict()
-        names.append(data.get("name", "(no name)"))
-    return {"collection": COLLECTION_SEATS, "count": len(names), "sample": names[:5]}
