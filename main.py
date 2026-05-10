@@ -39,27 +39,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+
+# 延遲初始化：在 lifespan 內建立，避免模組載入時無 event loop
+_api_client: AsyncApiClient | None = None
+line_bot_api: AsyncMessagingApi | None = None
+
+# Webhook 簽名驗證解析器（同步，無 event loop 需求）
+parser = WebhookParser(os.environ["LINE_CHANNEL_SECRET"])
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """應用程式生命週期管理：啟動時初始化 Firestore，關閉時釋放連線"""
+    """應用程式生命週期管理：啟動時初始化 Firestore 與 LINE client，關閉時釋放連線"""
+    global _api_client, line_bot_api
+
+    # 初始化 LINE Messaging API client（需要在 event loop 內）
+    _line_config = Configuration(
+        access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
+    )
+    _api_client = AsyncApiClient(_line_config)
+    line_bot_api = AsyncMessagingApi(_api_client)
+    logger.info("LINE AsyncApiClient 已初始化")
+
     await init_firestore()
     logger.info("Firestore AsyncClient 已初始化")
+
     yield
+
     await close_firestore()
     logger.info("Firestore AsyncClient 已關閉")
 
+    await _api_client.__aexit__(None, None, None)
+    logger.info("LINE AsyncApiClient 已關閉")
+
 
 app = FastAPI(title="婚禮小幫手 Webhook", lifespan=lifespan)
-
-# 初始化 LINE Messaging API client
-_line_config = Configuration(
-    access_token=os.environ["LINE_CHANNEL_ACCESS_TOKEN"]
-)
-_api_client = AsyncApiClient(_line_config)
-line_bot_api = AsyncMessagingApi(_api_client)
-
-# Webhook 簽名驗證解析器
-parser = WebhookParser(os.environ["LINE_CHANNEL_SECRET"])
 
 
 @app.post("/webhook")
