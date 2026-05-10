@@ -161,11 +161,11 @@ async def _search_seat(
 
         if score >= THRESHOLD_HIGH:
             # 高相似度：直接回傳桌號
-            table_display = f"「{matched_table_name}」第 {matched_table} 桌" if matched_table_name else f"第 {matched_table} 桌"
+            table_display = f"第{matched_table}桌，「{matched_table_name}」" if matched_table_name else f"第{matched_table}桌"
             await _reply_text(
                 line_bot_api,
                 reply_token,
-                f"找到了！{matched_name} 的座位是{table_display} 🎉",
+                f"{matched_name} 的座位 在{table_display}",
             )
             # 查詢完成，清除使用者狀態
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
@@ -213,11 +213,11 @@ async def _confirm_seat(
     pending_table = state_data.get("pending_table", "")
     pending_table_name = state_data.get("pending_table_name", "")
 
-    table_display = f"「{pending_table_name}」第 {pending_table} 桌" if pending_table_name else f"第 {pending_table} 桌"
+    table_display = f"第{pending_table}桌，「{pending_table_name}」" if pending_table_name else f"第{pending_table}桌"
     await _reply_text(
         line_bot_api,
         reply_token,
-        f"找到了！{pending_name} 的座位是{table_display} 🎉",
+        f"{pending_name} 的座位 在{table_display}",
     )
     # 清除使用者狀態
     await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
