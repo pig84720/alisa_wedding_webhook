@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 FALLBACK_MESSAGE = """\
 👋 歡迎使用克群&克婕の婚禮報報！
 請使用下方選單操作：
-📋 婚禮儀節表 — 查看典禮流程
+📋 婚禮儀節表 — 查看婚禮流程
 🪑 婚宴桌號查詢 — 輸入姓名找座位
-⛪ 教會婚禮資訊 — 查看教會相關資訊
-🏨 婚宴飯店資訊 — 查看婚宴會場相關資訊"""
+⛪ 教會婚禮資訊 — 查看教會交通資訊
+🏨 婚宴飯店資訊 — 查看婚宴會場交通資訊"""
 
 
 async def handle_fallback(line_bot_api: AsyncMessagingApi, reply_token: str) -> None:
