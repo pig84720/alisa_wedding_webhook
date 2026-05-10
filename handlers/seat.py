@@ -10,6 +10,7 @@ from linebot.v3.messaging import (
     AsyncMessagingApi,
     ReplyMessageRequest,
     TextMessage,
+    ImageMessage,
 )
 from db.firestore import (
     get_db,
@@ -19,23 +20,12 @@ from db.firestore import (
 
 logger = logging.getLogger(__name__)
 
-
-def _format_table(table_id, table_name: str) -> str:
-    """
-    格式化桌號顯示文字。
-    table_id == 0 視為主桌，直接顯示 table_name（如「主桌」）。
-    其他桌號顯示「第N桌，「桌名」」或「第N桌」。
-    """
-    if table_id == 0:
-        return table_name if table_name else "主桌"
-    if table_name:
-        return f"第{table_id}桌，「{table_name}」"
-    return f"第{table_id}桌"
-
-
 # 相似度門檻
 THRESHOLD_HIGH = 80   # >= 80：直接回傳桌號
 THRESHOLD_LOW = 60    # 60~79：請使用者確認；< 60：查無此人
+
+# 桌位圖片 URL（回傳桌號時一併附上）
+SEAT_MAP_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/S__115515530.jpg?alt=media&token=ab92bda2-04a2-4cd5-b3a8-0cdb514739f3"
 
 
 async def handle_seat_start(
@@ -140,7 +130,6 @@ async def _search_seat(
                 seats.append({
                     "name": raw_name,
                     "table": seat_data.get("table_id"),
-                    "table_name": seat_data.get("table_name", ""),
                 })
 
         if not seats:
@@ -166,7 +155,6 @@ async def _search_seat(
 
         matched_name, score, index = result
         matched_table = seats[index]["table"]
-        matched_table_name = seats[index].get("table_name", "")
 
         logger.info(
             "模糊比對：輸入=%s, 比對結果=%s, 相似度=%s, 桌號=%s",
@@ -174,14 +162,11 @@ async def _search_seat(
         )
 
         if score >= THRESHOLD_HIGH:
-            # 高相似度：直接回傳桌號
-            table_display = _format_table(matched_table, matched_table_name)
-            await _reply_text(
-                line_bot_api,
-                reply_token,
-                f"{matched_name} 的座位 在{table_display}",
+            # 高相似度：直接回傳桌號 + 桌位圖
+            await _reply_seat_result(
+                line_bot_api, reply_token,
+                f"{matched_name} 的座位 在第{matched_table}桌",
             )
-            # 查詢完成，清除使用者狀態
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
         elif score >= THRESHOLD_LOW:
@@ -191,7 +176,6 @@ async def _search_seat(
                     "state": "pending_confirm",
                     "pending_name": matched_name,
                     "pending_table": matched_table,
-                    "pending_table_name": matched_table_name,
                 }
             )
             await _reply_text(
@@ -225,17 +209,31 @@ async def _confirm_seat(
     db = get_db()
     pending_name = state_data.get("pending_name", "")
     pending_table = state_data.get("pending_table", "")
-    pending_table_name = state_data.get("pending_table_name", "")
 
-    table_display = _format_table(pending_table, pending_table_name)
-    await _reply_text(
-        line_bot_api,
-        reply_token,
-        f"{pending_name} 的座位 在{table_display}",
+    await _reply_seat_result(
+        line_bot_api, reply_token,
+        f"{pending_name} 的座位 在第{pending_table}桌",
     )
-    # 清除使用者狀態
     await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
     logger.info("user=%s 確認桌號：%s 桌", user_id, pending_table)
+
+
+async def _reply_seat_result(
+    line_bot_api: AsyncMessagingApi, reply_token: str, text: str
+) -> None:
+    """回傳桌號文字 + 桌位圖片"""
+    await line_bot_api.reply_message(
+        ReplyMessageRequest(
+            reply_token=reply_token,
+            messages=[
+                TextMessage(text=text),
+                ImageMessage(
+                    original_content_url=SEAT_MAP_URL,
+                    preview_image_url=SEAT_MAP_URL,
+                ),
+            ],
+        )
+    )
 
 
 async def _reply_not_found(
