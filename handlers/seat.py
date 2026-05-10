@@ -19,6 +19,20 @@ from db.firestore import (
 
 logger = logging.getLogger(__name__)
 
+
+def _format_table(table_id, table_name: str) -> str:
+    """
+    格式化桌號顯示文字。
+    table_id == 0 視為主桌，直接顯示 table_name（如「主桌」）。
+    其他桌號顯示「第N桌，「桌名」」或「第N桌」。
+    """
+    if table_id == 0:
+        return table_name if table_name else "主桌"
+    if table_name:
+        return f"第{table_id}桌，「{table_name}」"
+    return f"第{table_id}桌"
+
+
 # 相似度門檻
 THRESHOLD_HIGH = 80   # >= 80：直接回傳桌號
 THRESHOLD_LOW = 60    # 60~79：請使用者確認；< 60：查無此人
@@ -161,7 +175,7 @@ async def _search_seat(
 
         if score >= THRESHOLD_HIGH:
             # 高相似度：直接回傳桌號
-            table_display = f"第{matched_table}桌，「{matched_table_name}」" if matched_table_name else f"第{matched_table}桌"
+            table_display = _format_table(matched_table, matched_table_name)
             await _reply_text(
                 line_bot_api,
                 reply_token,
@@ -213,7 +227,7 @@ async def _confirm_seat(
     pending_table = state_data.get("pending_table", "")
     pending_table_name = state_data.get("pending_table_name", "")
 
-    table_display = f"第{pending_table}桌，「{pending_table_name}」" if pending_table_name else f"第{pending_table}桌"
+    table_display = _format_table(pending_table, pending_table_name)
     await _reply_text(
         line_bot_api,
         reply_token,
