@@ -48,23 +48,26 @@ async def handle_church(line_bot_api: AsyncMessagingApi, reply_token: str) -> No
             ImageCarouselColumn(
                 image_url=url,
                 action=URIAction(
-                    label="查看圖片",
+                    label="查看交通資訊",
                     uri=url,
                 ),
             )
             for url in image_urls
         ]
 
+        map_url: str = data.get("church_map_url", "")
+        map_text = f"📍 地圖導航\n真耶穌教會雙連教會\n{map_url}" if map_url else "📍 真耶穌教會雙連教會"
+
+        messages = [
+            TemplateMessage(
+                alt_text="教會婚禮資訊",
+                template=ImageCarouselTemplate(columns=columns),
+            ),
+            TextMessage(text=map_text),
+        ]
+
         await line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[
-                    TemplateMessage(
-                        alt_text="教會婚禮資訊",
-                        template=ImageCarouselTemplate(columns=columns),
-                    )
-                ],
-            )
+            ReplyMessageRequest(reply_token=reply_token, messages=messages)
         )
         logger.info("已回傳教會婚禮資訊 carousel，共 %d 張圖", len(columns))
 
