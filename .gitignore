@@ -18,3 +18,12 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+# Claude Code worktrees（不應進入 git）
+.claude/
+
+# Azure 套件目錄（不部署套件，讓 Azure 自己安裝）
+.python_packages/
+
+# venv
+.venv/
