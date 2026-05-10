@@ -123,7 +123,11 @@ async def _search_seat(
             seat_data = doc.to_dict()
             raw_name = seat_data.get("name", "").strip()  # 資料庫名字也 strip
             if raw_name:
-                seats.append({"name": raw_name, "table": seat_data.get("table")})
+                seats.append({
+                    "name": raw_name,
+                    "table": seat_data.get("table_id"),
+                    "table_name": seat_data.get("table_name", ""),
+                })
 
         if not seats:
             logger.warning("seats collection 為空")
@@ -148,6 +152,7 @@ async def _search_seat(
 
         matched_name, score, index = result
         matched_table = seats[index]["table"]
+        matched_table_name = seats[index].get("table_name", "")
 
         logger.info(
             "模糊比對：輸入=%s, 比對結果=%s, 相似度=%s, 桌號=%s",
@@ -156,10 +161,11 @@ async def _search_seat(
 
         if score >= THRESHOLD_HIGH:
             # 高相似度：直接回傳桌號
+            table_display = f"「{matched_table_name}」第 {matched_table} 桌" if matched_table_name else f"第 {matched_table} 桌"
             await _reply_text(
                 line_bot_api,
                 reply_token,
-                f"找到了！{matched_name} 的座位是第 {matched_table} 桌 🎉",
+                f"找到了！{matched_name} 的座位是{table_display} 🎉",
             )
             # 查詢完成，清除使用者狀態
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
@@ -171,6 +177,7 @@ async def _search_seat(
                     "state": "pending_confirm",
                     "pending_name": matched_name,
                     "pending_table": matched_table,
+                    "pending_table_name": matched_table_name,
                 }
             )
             await _reply_text(
@@ -204,11 +211,13 @@ async def _confirm_seat(
     db = get_db()
     pending_name = state_data.get("pending_name", "")
     pending_table = state_data.get("pending_table", "")
+    pending_table_name = state_data.get("pending_table_name", "")
 
+    table_display = f"「{pending_table_name}」第 {pending_table} 桌" if pending_table_name else f"第 {pending_table} 桌"
     await _reply_text(
         line_bot_api,
         reply_token,
-        f"找到了！{pending_name} 的座位是第 {pending_table} 桌 🎉",
+        f"找到了！{pending_name} 的座位是{table_display} 🎉",
     )
     # 清除使用者狀態
     await db.collection(COLLECTION_USER_STATES).document(user_id).delete()

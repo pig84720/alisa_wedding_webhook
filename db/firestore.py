@@ -46,5 +46,5 @@ def get_db() -> AsyncClient:
 # ── 常用集合名稱常數 ──────────────────────────────────────────
 COLLECTION_SETTINGS = "settings"
 DOC_MAIN = "main"
-COLLECTION_SEATS = "seats"
+COLLECTION_SEATS = "guests"
 COLLECTION_USER_STATES = "user_states"
