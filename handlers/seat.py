@@ -5,6 +5,7 @@ handlers/seat.py — 桌號查詢 handler
 
 import logging
 from rapidfuzz import process as fuzz_process, fuzz
+from pypinyin import lazy_pinyin
 
 from linebot.v3.messaging import (
     AsyncMessagingApi,
@@ -142,18 +143,32 @@ async def _search_seat(
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
             return
 
-        # 建立名字列表供 rapidfuzz 比對
-        name_list = [s["name"] for s in seats]
-        result = fuzz_process.extractOne(
-            query_name, name_list, scorer=fuzz.WRatio
-        )
+        # 雙軌比對：字元 + 拼音，取最高分
+        # 同音異字（涵/函、慧/惠）在拼音軌道距離為 0，字元軌道距離為 1
+        def pinyin_str(text: str) -> str:
+            return " ".join(lazy_pinyin(text))
 
-        if result is None:
+        query_pinyin = pinyin_str(query_name)
+        name_list = [s["name"] for s in seats]
+
+        best_score = -1
+        best_index = -1
+        for i, name in enumerate(name_list):
+            score_char = fuzz.WRatio(query_name, name)
+            score_pinyin = fuzz.WRatio(query_pinyin, pinyin_str(name))
+            score = max(score_char, score_pinyin)
+            if score > best_score:
+                best_score = score
+                best_index = i
+
+        if best_index == -1:
             await _reply_not_found(line_bot_api, reply_token)
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
             return
 
-        matched_name, score, index = result
+        matched_name = seats[best_index]["name"]
+        score = best_score
+        index = best_index
         matched_table = seats[index]["table"]
 
         logger.info(
