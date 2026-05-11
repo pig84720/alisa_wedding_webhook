@@ -1,10 +1,16 @@
 """
 handlers/seat.py — 桌號查詢 handler
-支援精確比對、模糊比對（rapidfuzz）、待確認流程
+支援精確比對、模糊比對（rapidfuzz + pypinyin 雙軌加權）、待確認流程
+
+比對策略：
+- 字元軌：rapidfuzz WRatio，權重 0.35
+- 拼音軌：逐字音節位置對齊命中率，權重 0.65
+- 最終分數 = 0.35 × char_score + 0.65 × pinyin_score
+- 只有輸入字串與資料庫完全相同才直接回桌號；其餘超過閾值一律詢問確認
 """
 
 import logging
-from rapidfuzz import process as fuzz_process, fuzz
+from rapidfuzz import fuzz
 from pypinyin import lazy_pinyin
 
 from linebot.v3.messaging import (
@@ -21,12 +27,43 @@ from db.firestore import (
 
 logger = logging.getLogger(__name__)
 
-# 相似度門檻
-THRESHOLD_HIGH = 80   # >= 80：直接回傳桌號
-THRESHOLD_LOW = 60    # 60~79：請使用者確認；< 60：查無此人
+# 確認門檻：加權分數 >= 60 → 詢問確認；< 60 → 查無此人
+THRESHOLD_CONFIRM = 60
 
 # 桌位圖片 URL（回傳桌號時一併附上）
 SEAT_MAP_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/S__115515530.jpg?alt=media&token=ab92bda2-04a2-4cd5-b3a8-0cdb514739f3"
+
+
+def _syllables(name: str) -> list[str]:
+    """將中文姓名轉成音節 list，例如「王欣怡」→ ['wang', 'xin', 'yi']"""
+    return lazy_pinyin(name)
+
+
+def _pinyin_position_score(query: str, candidate: str) -> float:
+    """
+    逐字音節位置對齊比對，回傳 0～100 的分數。
+    命中率 = 相同位置音節完全相等的數量 / max(兩者音節數)
+    """
+    q_syl = _syllables(query)
+    c_syl = _syllables(candidate)
+    max_len = max(len(q_syl), len(c_syl))
+    if max_len == 0:
+        return 0.0
+    matches = sum(
+        1 for i in range(min(len(q_syl), len(c_syl)))
+        if q_syl[i] == c_syl[i]
+    )
+    return matches / max_len * 100
+
+
+def _combined_score(query: str, candidate: str) -> float:
+    """
+    加權綜合分數：
+      0.35 × WRatio（字元相似度）+ 0.65 × 逐字拼音位置命中率
+    """
+    score_char = fuzz.WRatio(query, candidate)
+    score_pinyin = _pinyin_position_score(query, candidate)
+    return 0.35 * score_char + 0.65 * score_pinyin
 
 
 async def handle_seat_start(
@@ -39,11 +76,9 @@ async def handle_seat_start(
     db = get_db()
 
     try:
-        # 寫入使用者狀態，等待輸入姓名
         await db.collection(COLLECTION_USER_STATES).document(user_id).set(
             {"state": "waiting_for_name"}
         )
-
         await line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
@@ -74,28 +109,23 @@ async def handle_text_message(
     """
     db = get_db()
 
-    # 查詢使用者目前的狀態
     state_doc = await db.collection(COLLECTION_USER_STATES).document(user_id).get()
-
     if not state_doc.exists:
-        # 無待處理狀態，交由 fallback 處理
         return False
 
     state_data = state_doc.to_dict()
     state = state_data.get("state", "")
 
     if state == "waiting_for_name":
-        # 使用者輸入姓名，進行模糊比對
         await _search_seat(line_bot_api, reply_token, user_id, text)
         return True
 
     if state == "pending_confirm" and text.strip() == "是":
-        # 使用者確認模糊比對結果
         await _confirm_seat(line_bot_api, reply_token, user_id, state_data)
         return True
 
     if state == "pending_confirm":
-        # 使用者回覆了其他內容，視為重新輸入姓名
+        # 非「是」的回覆，視為重新輸入姓名
         await db.collection(COLLECTION_USER_STATES).document(user_id).set(
             {"state": "waiting_for_name"}
         )
@@ -112,21 +142,23 @@ async def _search_seat(
     name_input: str,
 ) -> None:
     """
-    執行桌號模糊比對核心邏輯
-    1. 從 Firestore seats collection 撈出所有賓客資料
-    2. 用 rapidfuzz 做模糊比對
-    3. 依相似度門檻回傳對應訊息
+    執行桌號比對核心邏輯：
+    1. 從 Firestore guests collection 撈出所有賓客資料
+    2. 對每位賓客計算加權綜合分數（字元 0.35 + 拼音位置 0.65）
+    3. 取最高分候選人：
+       - 輸入與資料庫完全相同 → 直接回桌號
+       - 分數 >= THRESHOLD_CONFIRM → 詢問確認
+       - 分數 < THRESHOLD_CONFIRM → 查無此人
     """
     db = get_db()
-    query_name = name_input.strip()  # 去除前後空白
+    query_name = name_input.strip()
 
     try:
-        # 撈出所有賓客座位資料
         seats_docs = db.collection(COLLECTION_SEATS).stream()
         seats = []
         async for doc in seats_docs:
             seat_data = doc.to_dict()
-            raw_name = seat_data.get("name", "").strip()  # 資料庫名字也 strip
+            raw_name = seat_data.get("name", "").strip()
             if raw_name:
                 seats.append({
                     "name": raw_name,
@@ -136,56 +168,39 @@ async def _search_seat(
         if not seats:
             logger.warning("seats collection 為空")
             await _reply_text(
-                line_bot_api,
-                reply_token,
+                line_bot_api, reply_token,
                 "目前尚未設定座位資料，請洽詢現場工作人員 🙏",
             )
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
             return
 
-        # 雙軌比對：字元 + 拼音，取最高分
-        # 同音異字（涵/函、慧/惠）在拼音軌道距離為 0，字元軌道距離為 1
-        def pinyin_str(text: str) -> str:
-            return " ".join(lazy_pinyin(text))
-
-        query_pinyin = pinyin_str(query_name)
-        name_list = [s["name"] for s in seats]
-
-        best_score = -1
+        # 對全部賓客計算加權分數，取最高
+        best_score = -1.0
         best_index = -1
-        for i, name in enumerate(name_list):
-            score_char = fuzz.WRatio(query_name, name)
-            score_pinyin = fuzz.WRatio(query_pinyin, pinyin_str(name))
-            score = max(score_char, score_pinyin)
+        for i, seat in enumerate(seats):
+            score = _combined_score(query_name, seat["name"])
             if score > best_score:
                 best_score = score
                 best_index = i
 
-        if best_index == -1:
-            await _reply_not_found(line_bot_api, reply_token)
-            await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
-            return
-
         matched_name = seats[best_index]["name"]
-        score = best_score
-        index = best_index
-        matched_table = seats[index]["table"]
+        matched_table = seats[best_index]["table"]
 
         logger.info(
-            "模糊比對：輸入=%s, 比對結果=%s, 相似度=%s, 桌號=%s",
-            query_name, matched_name, score, matched_table,
+            "比對結果：輸入=%s, 最佳候選=%s, 綜合分數=%.1f, 桌號=%s",
+            query_name, matched_name, best_score, matched_table,
         )
 
-        if score >= THRESHOLD_HIGH:
-            # 高相似度：直接回傳桌號 + 桌位圖
+        # 完全精確命中：字串相同，直接回桌號
+        if query_name == matched_name:
             await _reply_seat_result(
                 line_bot_api, reply_token,
                 f"{matched_name} 的座位 在第{matched_table}桌",
             )
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
-        elif score >= THRESHOLD_LOW:
-            # 中等相似度：請使用者確認
+        elif best_score >= THRESHOLD_CONFIRM:
+            # 分數夠高但不完全相同，詢問確認
             await db.collection(COLLECTION_USER_STATES).document(user_id).set(
                 {
                     "state": "pending_confirm",
@@ -194,13 +209,11 @@ async def _search_seat(
                 }
             )
             await _reply_text(
-                line_bot_api,
-                reply_token,
+                line_bot_api, reply_token,
                 f"您是指 {matched_name} 嗎？\n請回覆「是」確認，或重新輸入姓名",
             )
 
         else:
-            # 低相似度：查無此人
             await _reply_not_found(line_bot_api, reply_token)
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
@@ -218,9 +231,7 @@ async def _confirm_seat(
     user_id: str,
     state_data: dict,
 ) -> None:
-    """
-    使用者確認模糊比對結果，回傳暫存的桌號並清除狀態
-    """
+    """使用者確認模糊比對結果，回傳暫存的桌號並清除狀態"""
     db = get_db()
     pending_name = state_data.get("pending_name", "")
     pending_table = state_data.get("pending_table", "")
@@ -256,8 +267,7 @@ async def _reply_not_found(
 ) -> None:
     """查無此姓名時的回覆"""
     await _reply_text(
-        line_bot_api,
-        reply_token,
+        line_bot_api, reply_token,
         "查無此姓名，請確認後再試，或洽詢現場工作人員 🙏",
     )
 
