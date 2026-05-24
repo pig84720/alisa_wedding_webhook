@@ -5,6 +5,7 @@ handlers/ceremony.py — 婚禮儀節表 handler
 """
 
 import logging
+from datetime import datetime, timezone, timedelta
 from linebot.v3.messaging import (
     AsyncMessagingApi,
     ReplyMessageRequest,
@@ -18,6 +19,12 @@ from db.firestore import get_db, COLLECTION_SETTINGS, DOC_MAIN
 
 logger = logging.getLogger(__name__)
 
+# 台灣時區 (UTC+8)
+_TW = timezone(timedelta(hours=8))
+# 功能開放日期：2026/06/20 00:00 台灣時間
+RELEASE_DATE = datetime(2026, 6, 20, tzinfo=_TW)
+NOT_YET_MSG = "婚禮儀節表及桌位資訊將於婚禮前一週陸續開放查詢，感謝您的耐心等候，期待與您共享這份喜悅。"
+
 
 async def handle_ceremony(line_bot_api: AsyncMessagingApi, reply_token: str) -> None:
     """
@@ -25,6 +32,16 @@ async def handle_ceremony(line_bot_api: AsyncMessagingApi, reply_token: str) -> 
     從 Firestore 讀取 ceremony_images（URL 陣列），組成 Image Carousel 回傳
     向下相容：若 ceremony_images 不存在，fallback 至舊的 ceremony_image_url 字串
     """
+    # 開放日期前回傳提示訊息
+    if datetime.now(tz=_TW) < RELEASE_DATE:
+        await line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[TextMessage(text=NOT_YET_MSG)],
+            )
+        )
+        return
+
     db = get_db()
 
     try:

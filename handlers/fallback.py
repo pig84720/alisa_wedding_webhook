@@ -13,12 +13,11 @@ from linebot.v3.messaging import (
 logger = logging.getLogger(__name__)
 
 FALLBACK_MESSAGE = """\
-👋 歡迎使用克群&克婕の婚禮報報！
-請使用下方選單操作：
-📋 婚禮儀節表 — 查看婚禮流程
-🪑 婚宴桌號查詢 — 輸入姓名找座位
-⛪ 教會婚禮資訊 — 查看教會交通資訊
-🏨 婚宴飯店資訊 — 查看婚宴會場交通資訊"""
+感謝您的訊息！
+很抱歉，婚禮報報📣僅供資訊公告，無法逐一回覆訊息。
+如有其他需求，歡迎以電話或個人 LINE 直接與新人聯繫噢！
+謝謝您 😊
+婚禮相關資訊請點選下方「婚禮小幫手」 👇"""
 
 
 async def handle_fallback(line_bot_api: AsyncMessagingApi, reply_token: str) -> None:

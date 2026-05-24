@@ -10,6 +10,7 @@ handlers/seat.py — 桌號查詢 handler
 """
 
 import logging
+from datetime import datetime, timezone, timedelta
 from rapidfuzz import fuzz
 from pypinyin import lazy_pinyin
 
@@ -26,6 +27,12 @@ from db.firestore import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 台灣時區 (UTC+8)
+_TW = timezone(timedelta(hours=8))
+# 功能開放日期：2026/06/20 00:00 台灣時間
+RELEASE_DATE = datetime(2026, 6, 20, tzinfo=_TW)
+NOT_YET_MSG = "婚禮儀節表及桌位資訊將於婚禮前一週陸續開放查詢，感謝您的耐心等候，期待與您共享這份喜悅。"
 
 # 確認門檻：加權分數 >= 60 → 詢問確認；< 60 → 查無此人
 THRESHOLD_CONFIRM = 60
@@ -73,6 +80,16 @@ async def handle_seat_start(
     處理「桌號查詢」Postback 事件
     設定 user_state 為 waiting_for_name，請使用者輸入姓名
     """
+    # 開放日期前回傳提示訊息
+    if datetime.now(tz=_TW) < RELEASE_DATE:
+        await line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[TextMessage(text=NOT_YET_MSG)],
+            )
+        )
+        return
+
     db = get_db()
 
     try:
