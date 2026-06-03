@@ -9,7 +9,10 @@ handlers/seat.py — 桌號查詢 handler
 - 只有輸入字串與資料庫完全相同才直接回桌號；其餘超過閾值一律詢問確認
 """
 
+import asyncio
 import logging
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Mapping
 
@@ -41,6 +44,40 @@ THRESHOLD_CONFIRM = 60
 
 # 桌位圖片 URL（回傳桌號時一併附上）
 SEAT_MAP_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/S__115515530.jpg?alt=media&token=ab92bda2-04a2-4cd5-b3a8-0cdb514739f3"
+SEAT_CACHE_TTL_SECONDS = 900
+
+
+@dataclass(frozen=True)
+class SeatCacheEntry:
+    """單筆座位快取資料。"""
+    name: str
+    table: int | str | None
+    syllables: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SeatMatchResult:
+    """座位查詢比對結果。"""
+    matched_name: str
+    matched_table: int | str | None
+    best_score: float
+    documents_scanned: int
+
+
+@dataclass(frozen=True)
+class SeatCacheSnapshot:
+    """整份座位快取快照。"""
+    entries: tuple[SeatCacheEntry, ...]
+    exact_name_index: Mapping[str, SeatCacheEntry]
+    loaded_at: float
+
+
+_seat_cache: SeatCacheSnapshot = SeatCacheSnapshot(
+    entries=(),
+    exact_name_index={},
+    loaded_at=0.0,
+)
+_seat_cache_lock = asyncio.Lock()
 
 
 def _syllables(name: str) -> list[str]:
@@ -73,6 +110,136 @@ def _combined_score(query: str, candidate: str) -> float:
     score_char = fuzz.WRatio(query, candidate)
     score_pinyin = _pinyin_position_score(query, candidate)
     return 0.35 * score_char + 0.65 * score_pinyin
+
+
+def _pinyin_position_score_from_syllables(
+    query_syllables: tuple[str, ...],
+    candidate_syllables: tuple[str, ...],
+) -> float:
+    """使用預先計算好的音節列表計算拼音位置分數。"""
+    max_len = max(len(query_syllables), len(candidate_syllables))
+    if max_len == 0:
+        return 0.0
+    matches = sum(
+        1
+        for index in range(min(len(query_syllables), len(candidate_syllables)))
+        if query_syllables[index] == candidate_syllables[index]
+    )
+    return matches / max_len * 100
+
+
+def _combined_score_cached(
+    query_name: str,
+    query_syllables: tuple[str, ...],
+    entry: SeatCacheEntry,
+) -> float:
+    """對快取中的座位資料計算加權綜合分數。"""
+    score_char = fuzz.WRatio(query_name, entry.name)
+    score_pinyin = _pinyin_position_score_from_syllables(
+        query_syllables,
+        entry.syllables,
+    )
+    return 0.35 * score_char + 0.65 * score_pinyin
+
+
+async def refresh_seat_cache(force: bool = False) -> SeatCacheSnapshot:
+    """
+    從 Firestore 重新載入座位資料到每個 worker 的記憶體中。
+    force=False 時若快取仍在 TTL 內，直接重用現有資料。
+    """
+    global _seat_cache
+
+    now = time.monotonic()
+    if (
+        not force
+        and _seat_cache.entries
+        and now - _seat_cache.loaded_at < SEAT_CACHE_TTL_SECONDS
+    ):
+        return _seat_cache
+
+    async with _seat_cache_lock:
+        now = time.monotonic()
+        if (
+            not force
+            and _seat_cache.entries
+            and now - _seat_cache.loaded_at < SEAT_CACHE_TTL_SECONDS
+        ):
+            return _seat_cache
+
+        db = get_db()
+        seats_docs = db.collection(COLLECTION_SEATS).stream()
+        entries: list[SeatCacheEntry] = []
+        exact_name_index: dict[str, SeatCacheEntry] = {}
+
+        async for doc in seats_docs:
+            seat_data = doc.to_dict()
+            raw_name = seat_data.get("name", "").strip()
+            if not raw_name:
+                continue
+
+            table_value = seat_data.get("table_id", seat_data.get("table"))
+            entry = SeatCacheEntry(
+                name=raw_name,
+                table=table_value,
+                syllables=tuple(_syllables(raw_name)),
+            )
+            entries.append(entry)
+            exact_name_index[raw_name] = entry
+
+        _seat_cache = SeatCacheSnapshot(
+            entries=tuple(entries),
+            exact_name_index=exact_name_index,
+            loaded_at=time.monotonic(),
+        )
+        logger.info(
+            "seat cache 已刷新 entries=%d ttl_seconds=%d",
+            len(entries),
+            SEAT_CACHE_TTL_SECONDS,
+        )
+        return _seat_cache
+
+
+async def warm_seat_cache() -> None:
+    """在啟動時預熱座位快取，失敗時僅記錄 log，不阻止 app 啟動。"""
+    try:
+        await refresh_seat_cache(force=True)
+    except Exception:
+        logger.exception("seat cache 預熱失敗")
+
+
+async def find_best_seat_match(query_name: str) -> SeatMatchResult | None:
+    """從記憶體快取中尋找最佳座位候選人。"""
+    snapshot = await refresh_seat_cache()
+    if not snapshot.entries:
+        return None
+
+    exact_entry = snapshot.exact_name_index.get(query_name)
+    if exact_entry is not None:
+        return SeatMatchResult(
+            matched_name=exact_entry.name,
+            matched_table=exact_entry.table,
+            best_score=100.0,
+            documents_scanned=1,
+        )
+
+    query_syllables = tuple(_syllables(query_name))
+    best_score = -1.0
+    best_entry: SeatCacheEntry | None = None
+    for entry in snapshot.entries:
+        score = _combined_score_cached(query_name, query_syllables, entry)
+        if score > best_score:
+            best_score = score
+            best_entry = entry
+
+    if best_entry is None:
+        return None
+
+    return SeatMatchResult(
+        matched_name=best_entry.name,
+        matched_table=best_entry.table,
+        best_score=best_score,
+        documents_scanned=len(snapshot.entries),
+    )
 
 
 async def handle_seat_start(
@@ -212,18 +379,8 @@ async def _search_seat(
     }
 
     try:
-        seats_docs = db.collection(COLLECTION_SEATS).stream()
-        seats = []
-        async for doc in seats_docs:
-            seat_data = doc.to_dict()
-            raw_name = seat_data.get("name", "").strip()
-            if raw_name:
-                seats.append({
-                    "name": raw_name,
-                    "table": seat_data.get("table_id"),
-                })
-
-        if not seats:
+        match_result = await find_best_seat_match(query_name)
+        if match_result is None:
             logger.warning("seats collection 為空 %s", format_log_context(reply_context))
             await _reply_text(
                 line_bot_api, reply_token,
@@ -233,23 +390,16 @@ async def _search_seat(
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
             return
 
-        # 對全部賓客計算加權分數，取最高
-        best_score = -1.0
-        best_index = -1
-        for i, seat in enumerate(seats):
-            score = _combined_score(query_name, seat["name"])
-            if score > best_score:
-                best_score = score
-                best_index = i
-
-        matched_name = seats[best_index]["name"]
-        matched_table = seats[best_index]["table"]
+        matched_name = match_result.matched_name
+        matched_table = match_result.matched_table
+        best_score = match_result.best_score
 
         logger.info(
-            "座位比對結果 best_match=%s score=%.1f table=%s %s",
+            "座位比對結果 best_match=%s score=%.1f table=%s scanned=%d %s",
             matched_name,
             best_score,
             matched_table,
+            match_result.documents_scanned,
             format_log_context(reply_context),
         )
 

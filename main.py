@@ -40,8 +40,13 @@ from db.firestore import (
 )
 from handlers.ceremony import handle_ceremony
 from handlers.church import handle_church
-from handlers.seat import _combined_score
-from handlers.seat import handle_seat_start, handle_text_message
+from handlers.seat import (
+    find_best_seat_match,
+    handle_seat_start,
+    handle_text_message,
+    refresh_seat_cache,
+    warm_seat_cache,
+)
 from handlers.venue import handle_venue
 from handlers.fallback import handle_fallback
 from utils.line_reply import format_log_context, sanitize_log_context
@@ -93,6 +98,7 @@ async def lifespan(app: FastAPI):
 
     await init_firestore()
     logger.info("Firestore AsyncClient 已初始化 pid=%s", os.getpid())
+    await warm_seat_cache()
 
     yield
 
@@ -205,18 +211,7 @@ async def _run_load_probe(
             "pid": os.getpid(),
         }
 
-    seats_docs = db.collection(COLLECTION_SEATS).stream()
-    documents_scanned = 0
-    best_score = -1.0
-    async for doc in seats_docs:
-        seat_data = doc.to_dict()
-        candidate_name = seat_data.get("name", "").strip()
-        if not candidate_name:
-            continue
-        documents_scanned += 1
-        score = _combined_score(query_name, candidate_name)
-        if score > best_score:
-            best_score = score
+    match_result = await find_best_seat_match(query_name)
 
     elapsed_ms = (time.monotonic() - started_at) * 1000
     return {
@@ -224,8 +219,8 @@ async def _run_load_probe(
         "success": True,
         "elapsed_ms": round(elapsed_ms, 1),
         "document_exists": None,
-        "documents_scanned": documents_scanned,
-        "best_score": round(best_score, 1) if documents_scanned else None,
+        "documents_scanned": 0 if match_result is None else match_result.documents_scanned,
+        "best_score": None if match_result is None else round(match_result.best_score, 1),
         "pid": os.getpid(),
     }
 
@@ -371,12 +366,16 @@ async def load_probe(
     diagnostic_token: str | None = Header(default=None, alias="X-Diagnostic-Token"),
     scenario: Literal["settings_read", "seat_lookup"] = Query(default="seat_lookup"),
     query_name: str = Query(default=DEFAULT_LOAD_TEST_QUERY_NAME, min_length=1, max_length=32),
+    refresh_cache: bool = Query(default=False),
 ):
     """
     受保護的壓測探針。
     用來模擬 App Service + Firestore 的實際負載，不會對 LINE API 發送 reply。
     """
     _require_diagnostic_token(diagnostic_token)
+
+    if refresh_cache:
+        await refresh_seat_cache(force=True)
 
     try:
         result = await _run_load_probe(scenario, query_name.strip())
