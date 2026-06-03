@@ -11,12 +11,13 @@ handlers/seat.py — 桌號查詢 handler
 
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Any, Mapping
+
 from rapidfuzz import fuzz
 from pypinyin import lazy_pinyin
 
 from linebot.v3.messaging import (
     AsyncMessagingApi,
-    ReplyMessageRequest,
     TextMessage,
     ImageMessage,
 )
@@ -25,6 +26,7 @@ from db.firestore import (
     COLLECTION_SEATS,
     COLLECTION_USER_STATES,
 )
+from utils.line_reply import format_log_context, safe_reply_message
 
 logger = logging.getLogger(__name__)
 
@@ -74,19 +76,24 @@ def _combined_score(query: str, candidate: str) -> float:
 
 
 async def handle_seat_start(
-    line_bot_api: AsyncMessagingApi, reply_token: str, user_id: str
+    line_bot_api: AsyncMessagingApi,
+    reply_token: str,
+    user_id: str,
+    context: Mapping[str, Any] | None = None,
 ) -> None:
     """
     處理「桌號查詢」Postback 事件
     設定 user_state 為 waiting_for_name，請使用者輸入姓名
     """
+    reply_context = {**(context or {}), "handler": "seat_start", "user_id": user_id}
+    logger.info("進入 seat_start handler %s", format_log_context(reply_context))
     # 開放日期前回傳提示訊息
     if datetime.now(tz=_TW) < RELEASE_DATE:
-        await line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text=NOT_YET_MSG)],
-            )
+        await safe_reply_message(
+            line_bot_api,
+            reply_token=reply_token,
+            messages=[TextMessage(text=NOT_YET_MSG)],
+            context=reply_context,
         )
         return
 
@@ -96,21 +103,21 @@ async def handle_seat_start(
         await db.collection(COLLECTION_USER_STATES).document(user_id).set(
             {"state": "waiting_for_name"}
         )
-        await line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text="請輸入您的姓名 🔍")],
-            )
+        await safe_reply_message(
+            line_bot_api,
+            reply_token=reply_token,
+            messages=[TextMessage(text="請輸入您的姓名 🔍")],
+            context=reply_context,
         )
-        logger.info("user=%s 進入桌號查詢流程", user_id)
+        logger.info("seat_start handler 執行完成 %s", format_log_context(reply_context))
 
-    except Exception as e:
-        logger.error("handle_seat_start 發生錯誤：%s", e, exc_info=True)
-        await line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text="抱歉，系統發生錯誤，請稍後再試 🙏")],
-            )
+    except Exception:
+        logger.exception("handle_seat_start 發生錯誤 %s", format_log_context(reply_context))
+        await safe_reply_message(
+            line_bot_api,
+            reply_token=reply_token,
+            messages=[TextMessage(text="抱歉，系統發生錯誤，請稍後再試 🙏")],
+            context={**reply_context, "handler": "seat_start_error"},
         )
 
 
@@ -119,26 +126,47 @@ async def handle_text_message(
     reply_token: str,
     user_id: str,
     text: str,
+    context: Mapping[str, Any] | None = None,
 ) -> bool:
     """
     根據 user_state 決定如何處理文字訊息。
     回傳 True 表示已處理，False 表示交由 fallback 處理。
     """
+    reply_context = {
+        **(context or {}),
+        "handler": "seat_text_router",
+        "user_id": user_id,
+        "text": text,
+    }
     db = get_db()
 
     state_doc = await db.collection(COLLECTION_USER_STATES).document(user_id).get()
     if not state_doc.exists:
+        logger.info("seat_text_router 無狀態，交由 fallback %s", format_log_context(reply_context))
         return False
 
     state_data = state_doc.to_dict()
     state = state_data.get("state", "")
+    logger.info("seat_text_router 命中狀態 state=%s %s", state, format_log_context(reply_context))
 
     if state == "waiting_for_name":
-        await _search_seat(line_bot_api, reply_token, user_id, text)
+        await _search_seat(
+            line_bot_api,
+            reply_token,
+            user_id,
+            text,
+            context=reply_context,
+        )
         return True
 
     if state == "pending_confirm" and text.strip() == "是":
-        await _confirm_seat(line_bot_api, reply_token, user_id, state_data)
+        await _confirm_seat(
+            line_bot_api,
+            reply_token,
+            user_id,
+            state_data,
+            context=reply_context,
+        )
         return True
 
     if state == "pending_confirm":
@@ -146,7 +174,13 @@ async def handle_text_message(
         await db.collection(COLLECTION_USER_STATES).document(user_id).set(
             {"state": "waiting_for_name"}
         )
-        await _search_seat(line_bot_api, reply_token, user_id, text)
+        await _search_seat(
+            line_bot_api,
+            reply_token,
+            user_id,
+            text,
+            context=reply_context,
+        )
         return True
 
     return False
@@ -157,6 +191,7 @@ async def _search_seat(
     reply_token: str,
     user_id: str,
     name_input: str,
+    context: Mapping[str, Any] | None = None,
 ) -> None:
     """
     執行桌號比對核心邏輯：
@@ -169,6 +204,12 @@ async def _search_seat(
     """
     db = get_db()
     query_name = name_input.strip()
+    reply_context = {
+        **(context or {}),
+        "handler": "seat_search",
+        "user_id": user_id,
+        "text": query_name,
+    }
 
     try:
         seats_docs = db.collection(COLLECTION_SEATS).stream()
@@ -183,10 +224,11 @@ async def _search_seat(
                 })
 
         if not seats:
-            logger.warning("seats collection 為空")
+            logger.warning("seats collection 為空 %s", format_log_context(reply_context))
             await _reply_text(
                 line_bot_api, reply_token,
                 "目前尚未設定座位資料，請洽詢現場工作人員 🙏",
+                context=reply_context,
             )
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
             return
@@ -204,8 +246,11 @@ async def _search_seat(
         matched_table = seats[best_index]["table"]
 
         logger.info(
-            "比對結果：輸入=%s, 最佳候選=%s, 綜合分數=%.1f, 桌號=%s",
-            query_name, matched_name, best_score, matched_table,
+            "座位比對結果 best_match=%s score=%.1f table=%s %s",
+            matched_name,
+            best_score,
+            matched_table,
+            format_log_context(reply_context),
         )
 
         # 完全精確命中：字串相同，直接回桌號
@@ -213,6 +258,7 @@ async def _search_seat(
             await _reply_seat_result(
                 line_bot_api, reply_token,
                 f"{matched_name} 的座位 在第{matched_table}桌",
+                context={**reply_context, "matched_name": matched_name, "table": matched_table},
             )
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
@@ -228,16 +274,18 @@ async def _search_seat(
             await _reply_text(
                 line_bot_api, reply_token,
                 f"您是指 {matched_name} 嗎？\n請回覆「是」確認，或重新輸入姓名",
+                context={**reply_context, "matched_name": matched_name, "table": matched_table},
             )
 
         else:
-            await _reply_not_found(line_bot_api, reply_token)
+            await _reply_not_found(line_bot_api, reply_token, context=reply_context)
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
-    except Exception as e:
-        logger.error("_search_seat 發生錯誤：%s", e, exc_info=True)
+    except Exception:
+        logger.exception("_search_seat 發生錯誤 %s", format_log_context(reply_context))
         await _reply_text(
             line_bot_api, reply_token, "查詢時發生錯誤，請稍後再試 🙏"
+            , context={**reply_context, "handler": "seat_search_error"}
         )
         await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
@@ -247,6 +295,7 @@ async def _confirm_seat(
     reply_token: str,
     user_id: str,
     state_data: dict,
+    context: Mapping[str, Any] | None = None,
 ) -> None:
     """使用者確認模糊比對結果，回傳暫存的桌號並清除狀態"""
     db = get_db()
@@ -256,46 +305,66 @@ async def _confirm_seat(
     await _reply_seat_result(
         line_bot_api, reply_token,
         f"{pending_name} 的座位 在第{pending_table}桌",
+        context={
+            **(context or {}),
+            "handler": "seat_confirm",
+            "user_id": user_id,
+            "matched_name": pending_name,
+            "table": pending_table,
+        },
     )
     await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
-    logger.info("user=%s 確認桌號：%s 桌", user_id, pending_table)
+    logger.info(
+        "seat_confirm handler 執行完成 user_id=%s table=%s",
+        user_id,
+        pending_table,
+    )
 
 
 async def _reply_seat_result(
-    line_bot_api: AsyncMessagingApi, reply_token: str, text: str
+    line_bot_api: AsyncMessagingApi,
+    reply_token: str,
+    text: str,
+    context: Mapping[str, Any] | None = None,
 ) -> None:
     """回傳桌號文字 + 桌位圖片"""
-    await line_bot_api.reply_message(
-        ReplyMessageRequest(
-            reply_token=reply_token,
-            messages=[
-                TextMessage(text=text),
-                ImageMessage(
-                    original_content_url=SEAT_MAP_URL,
-                    preview_image_url=SEAT_MAP_URL,
-                ),
-            ],
-        )
+    await safe_reply_message(
+        line_bot_api,
+        reply_token=reply_token,
+        messages=[
+            TextMessage(text=text),
+            ImageMessage(
+                original_content_url=SEAT_MAP_URL,
+                preview_image_url=SEAT_MAP_URL,
+            ),
+        ],
+        context=context,
     )
 
 
 async def _reply_not_found(
-    line_bot_api: AsyncMessagingApi, reply_token: str
+    line_bot_api: AsyncMessagingApi,
+    reply_token: str,
+    context: Mapping[str, Any] | None = None,
 ) -> None:
     """查無此姓名時的回覆"""
     await _reply_text(
         line_bot_api, reply_token,
         "查無此姓名，請確認後再試，或洽詢現場工作人員 🙏",
+        context={**(context or {}), "handler": "seat_not_found"},
     )
 
 
 async def _reply_text(
-    line_bot_api: AsyncMessagingApi, reply_token: str, text: str
+    line_bot_api: AsyncMessagingApi,
+    reply_token: str,
+    text: str,
+    context: Mapping[str, Any] | None = None,
 ) -> None:
     """輔助函式：回傳單一文字訊息"""
-    await line_bot_api.reply_message(
-        ReplyMessageRequest(
-            reply_token=reply_token,
-            messages=[TextMessage(text=text)],
-        )
+    await safe_reply_message(
+        line_bot_api,
+        reply_token=reply_token,
+        messages=[TextMessage(text=text)],
+        context=context,
     )

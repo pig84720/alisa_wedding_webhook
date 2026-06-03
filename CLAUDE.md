@@ -12,7 +12,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **儀節表**：回傳典禮流程圖片
 - **桌號查詢**：賓客輸入姓名，用模糊比對找座位（含待確認流程）
 - **婚宴會館資訊**：回傳場地名稱、地址、地圖連結
-- **小遊戲**：回傳 Kahoot 遊戲連結
 - **Rich Menu**：LINE 對話底部 2×2 快捷選單
 
 技術架構：FastAPI（async）+ LINE Bot SDK v3 + Google Cloud Firestore（AsyncClient）+ rapidfuzz 模糊比對
@@ -55,7 +54,6 @@ Pillow>=10.0.0                # Rich Menu 圖片壓縮用
 │   ├── ceremony.py            # 儀節表：從 Firestore 取圖片 URL，回傳 ImageMessage
 │   ├── seat.py                # 桌號查詢：rapidfuzz 模糊比對 + user_states 狀態機
 │   ├── venue.py               # 婚宴會館資訊：組合文字訊息回傳
-│   ├── game.py                # 小遊戲：回傳 Kahoot URL
 │   └── fallback.py            # 罐頭訊息：未識別輸入時引導使用選單
 ├── richmenu/
 │   ├── richmenu.png           # Rich Menu 圖片原始檔（可超過 1MB，腳本會自動壓縮）
@@ -81,7 +79,6 @@ POST /webhook
   │   ├── action=ceremony   → handle_ceremony
   │   ├── action=seat_start → handle_seat_start（寫入 user_state: waiting_for_name）
   │   ├── action=venue      → handle_venue
-  │   ├── action=game       → handle_game
   │   └── 其他             → handle_fallback
   └── MessageEvent（TextMessage）
       └── handle_text_message → 依 user_state 路由
@@ -130,7 +127,6 @@ settings/main
   venue_name: string           # 場地名稱，例："彭園三重館"
   venue_address: string        # 地址，例："新北市三重區龍門路6號3F"
   venue_map_url: string        # Google Maps 連結
-  kahoot_url: string           # Kahoot 遊戲 URL
 
 seats/{auto_id}
   name: string                 # 賓客姓名
@@ -159,7 +155,7 @@ user_states/{LINE_user_id}
 | 左上 | 📋 儀節表 | `action=ceremony` |
 | 右上 | 🪑 桌號查詢 | `action=seat_start` |
 | 左下 | 🏛️ 婚宴會館資訊 | `action=venue` |
-| 右下 | 🎮 小遊戲 | `action=game` |
+| 右下 | ⛪ 教會婚禮資訊 | `action=church` |
 
 **圖片壓縮流程（`setup_richmenu.py`）：**
 1. 用 Pillow 開啟 `richmenu/richmenu.png`，強制 resize 到 2500×1686（LINE 要求圖片尺寸必須與 RichMenuSize 完全一致）
@@ -184,7 +180,7 @@ user_states/{LINE_user_id}
    ```
    或直接填入：
    ```
-   gunicorn -w 4 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:8000
+   gunicorn -w 2 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:8000
    ```
 5. LINE Developers Console → Messaging API → Webhook URL 填入：
    ```
@@ -200,7 +196,7 @@ user_states/{LINE_user_id}
 ```bash
 python tools/init_firestore.py
 ```
-寫入 `settings/main` 初始資料（若已存在則覆蓋）。`venue_name` / `venue_address` 已預填，`ceremony_image_url`、`venue_map_url`、`kahoot_url` 需事後到 Firebase Console 手動填入。
+寫入 `settings/main` 初始資料（若已存在則覆蓋）。`venue_name` / `venue_address` 已預填，`ceremony_image_url`、`venue_map_url` 需事後到 Firebase Console 手動填入。
 
 ### `tools/import_seats.py`（每次更新座位時執行）
 ```bash
@@ -245,7 +241,7 @@ ngrok http 8000
 - **Webhook URL**：`https://xxxx.ngrok-free.app/webhook`
 - 開啟「使用 Webhook」
 
-健康檢查端點：`GET /health` → `{"status": "healthy"}`
+健康檢查端點：`GET /health` → `{"status": "ok"}`
 
 ---
 

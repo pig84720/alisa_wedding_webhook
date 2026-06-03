@@ -4,11 +4,11 @@ handlers/fallback.py — 罐頭訊息 handler
 """
 
 import logging
-from linebot.v3.messaging import (
-    AsyncMessagingApi,
-    ReplyMessageRequest,
-    TextMessage,
-)
+from typing import Any, Mapping
+
+from linebot.v3.messaging import AsyncMessagingApi, TextMessage
+
+from utils.line_reply import format_log_context, safe_reply_message
 
 logger = logging.getLogger(__name__)
 
@@ -20,17 +20,20 @@ FALLBACK_MESSAGE = """\
 婚禮相關資訊請點選下方「婚禮小幫手」 👇"""
 
 
-async def handle_fallback(line_bot_api: AsyncMessagingApi, reply_token: str) -> None:
+async def handle_fallback(
+    line_bot_api: AsyncMessagingApi,
+    reply_token: str,
+    context: Mapping[str, Any] | None = None,
+) -> None:
     """
     回傳罐頭訊息，引導使用者使用 Rich Menu
     """
-    try:
-        await line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=reply_token,
-                messages=[TextMessage(text=FALLBACK_MESSAGE)],
-            )
-        )
-        logger.info("已回傳罐頭訊息")
-    except Exception as e:
-        logger.error("handle_fallback 發生錯誤：%s", e, exc_info=True)
+    reply_context = {**(context or {}), "handler": "fallback"}
+    logger.info("進入 fallback handler %s", format_log_context(reply_context))
+    await safe_reply_message(
+        line_bot_api,
+        reply_token=reply_token,
+        messages=[TextMessage(text=FALLBACK_MESSAGE)],
+        context=reply_context,
+    )
+    logger.info("fallback handler 執行完成 %s", format_log_context(reply_context))

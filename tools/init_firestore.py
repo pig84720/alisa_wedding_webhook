@@ -28,7 +28,6 @@ INITIAL_SETTINGS = {
     "venue_name": "彭園三重館",
     "venue_address": "新北市三重區龍門路6號3F",
     "venue_map_url": "",                # 地圖連結（之後再填）
-    "kahoot_url": "",                   # Kahoot 遊戲連結（之後再填）
 }
 
 
