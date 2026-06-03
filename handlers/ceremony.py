@@ -5,7 +5,6 @@ handlers/ceremony.py — 婚禮儀節表 handler
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
 from typing import Any, Mapping
 
 from linebot.v3.messaging import (
@@ -21,12 +20,6 @@ from utils.line_reply import format_log_context, safe_reply_message
 
 logger = logging.getLogger(__name__)
 
-# 台灣時區 (UTC+8)
-_TW = timezone(timedelta(hours=8))
-# 功能開放日期：2026/06/20 00:00 台灣時間
-RELEASE_DATE = datetime(2026, 6, 20, tzinfo=_TW)
-NOT_YET_MSG = "婚禮儀節表及桌位資訊將於婚禮前一週陸續開放查詢，感謝您的耐心等候，期待與您共享這份喜悅。"
-
 
 async def handle_ceremony(
     line_bot_api: AsyncMessagingApi,
@@ -40,16 +33,6 @@ async def handle_ceremony(
     """
     reply_context = {**(context or {}), "handler": "ceremony"}
     logger.info("進入 ceremony handler %s", format_log_context(reply_context))
-
-    # 開放日期前回傳提示訊息
-    if datetime.now(tz=_TW) < RELEASE_DATE:
-        await safe_reply_message(
-            line_bot_api,
-            reply_token=reply_token,
-            messages=[TextMessage(text=NOT_YET_MSG)],
-            context=reply_context,
-        )
-        return
 
     db = get_db()
 

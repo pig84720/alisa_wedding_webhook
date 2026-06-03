@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 _TW = timezone(timedelta(hours=8))
 # 功能開放日期：2026/06/20 00:00 台灣時間
 RELEASE_DATE = datetime(2026, 6, 20, tzinfo=_TW)
-NOT_YET_MSG = "婚禮儀節表及桌位資訊將於婚禮前一週陸續開放查詢，感謝您的耐心等候，期待與您共享這份喜悅。"
+NOT_YET_MSG = "桌位資訊將於婚禮前一週陸續開放查詢，感謝您的耐心等候，期待與您共享這份喜悅。"
 
 # 確認門檻：加權分數 >= 60 → 詢問確認；< 60 → 查無此人
 THRESHOLD_CONFIRM = 60

@@ -13,15 +13,15 @@ db = firestore.client()
 
 data = {
     "ceremony_images": [
-        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/messageImage_1777993123911.jpg?alt=media&token=7d470141-f717-4435-b3bb-3db225a73990",
+        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/messageImage_1780498164473.jpg?alt=media&token=4ccc160f-066c-49f4-b930-65a89fdf561f",
     ],
     "church_images": [
         "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/messageImage_1777993364477.jpg?alt=media&token=9664ac3a-f7f7-492c-9023-59c44399b195",
     ],
     "church_map_url": "https://maps.app.goo.gl/oudBfg4z8kNVvS3s8",
     "venue_images": [
-        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/S__114745360.jpg?alt=media&token=35802849-a3c8-4820-99f4-c782127e8184",
-        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/S__114745361.jpg?alt=media&token=ab2d1ac8-c819-4454-b16d-a8d81e35a498",
+        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/1779629958304.jpg?alt=media&token=f4bc3284-6b23-4f0c-81dc-7f327b5ad888",
+        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/1779629802779.jpg?alt=media&token=6613d653-49f6-463c-a3c1-a7f386b24c6e",
     ],
     "venue_map_url": "https://maps.app.goo.gl/49kvaCrkoy8YgcVn6",
 }
