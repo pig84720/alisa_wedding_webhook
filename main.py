@@ -10,10 +10,11 @@ import inspect
 import secrets
 import time
 from contextlib import asynccontextmanager
+from typing import Literal
 
 import aiohttp
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, HTTPException, Header
+from fastapi import FastAPI, Request, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 
 from linebot.v3 import WebhookParser
@@ -29,9 +30,17 @@ from linebot.v3.webhooks import (
 )
 from linebot.v3.exceptions import InvalidSignatureError
 
-from db.firestore import init_firestore, close_firestore
+from db.firestore import (
+    init_firestore,
+    close_firestore,
+    get_db,
+    COLLECTION_SETTINGS,
+    DOC_MAIN,
+    COLLECTION_SEATS,
+)
 from handlers.ceremony import handle_ceremony
 from handlers.church import handle_church
+from handlers.seat import _combined_score
 from handlers.seat import handle_seat_start, handle_text_message
 from handlers.venue import handle_venue
 from handlers.fallback import handle_fallback
@@ -55,6 +64,7 @@ OUTBOUND_DIAGNOSTIC_TARGETS = [
     "https://www.microsoft.com",
 ]
 OUTBOUND_DIAGNOSTIC_TIMEOUT_SECONDS = 5
+DEFAULT_LOAD_TEST_QUERY_NAME = "王小明"
 
 # Webhook 簽名驗證解析器（同步，無 event loop 需求）
 parser = WebhookParser(os.environ["LINE_CHANNEL_SECRET"])
@@ -172,6 +182,52 @@ async def _probe_outbound_target(
             "error_type": type(exc).__name__,
             "error_message": str(exc) or repr(exc),
         }
+
+
+async def _run_load_probe(
+    scenario: Literal["settings_read", "seat_lookup"],
+    query_name: str,
+) -> dict:
+    """執行單次內部壓測探針，不觸發真實 LINE Reply API。"""
+    db = get_db()
+    started_at = time.monotonic()
+
+    if scenario == "settings_read":
+        doc = await db.collection(COLLECTION_SETTINGS).document(DOC_MAIN).get()
+        elapsed_ms = (time.monotonic() - started_at) * 1000
+        return {
+            "scenario": scenario,
+            "success": True,
+            "elapsed_ms": round(elapsed_ms, 1),
+            "document_exists": doc.exists,
+            "documents_scanned": 1,
+            "best_score": None,
+            "pid": os.getpid(),
+        }
+
+    seats_docs = db.collection(COLLECTION_SEATS).stream()
+    documents_scanned = 0
+    best_score = -1.0
+    async for doc in seats_docs:
+        seat_data = doc.to_dict()
+        candidate_name = seat_data.get("name", "").strip()
+        if not candidate_name:
+            continue
+        documents_scanned += 1
+        score = _combined_score(query_name, candidate_name)
+        if score > best_score:
+            best_score = score
+
+    elapsed_ms = (time.monotonic() - started_at) * 1000
+    return {
+        "scenario": scenario,
+        "success": True,
+        "elapsed_ms": round(elapsed_ms, 1),
+        "document_exists": None,
+        "documents_scanned": documents_scanned,
+        "best_score": round(best_score, 1) if documents_scanned else None,
+        "pid": os.getpid(),
+    }
 
 
 @app.post("/webhook")
@@ -307,4 +363,42 @@ async def outbound_diagnostics(
     return {
         "status": "ok",
         "results": results,
+    }
+
+
+@app.get("/internal/diagnostics/load-probe")
+async def load_probe(
+    diagnostic_token: str | None = Header(default=None, alias="X-Diagnostic-Token"),
+    scenario: Literal["settings_read", "seat_lookup"] = Query(default="seat_lookup"),
+    query_name: str = Query(default=DEFAULT_LOAD_TEST_QUERY_NAME, min_length=1, max_length=32),
+):
+    """
+    受保護的壓測探針。
+    用來模擬 App Service + Firestore 的實際負載，不會對 LINE API 發送 reply。
+    """
+    _require_diagnostic_token(diagnostic_token)
+
+    try:
+        result = await _run_load_probe(scenario, query_name.strip())
+    except Exception as exc:
+        logger.exception("load probe 執行失敗 scenario=%s", scenario)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "scenario": scenario,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc) or repr(exc),
+            },
+        ) from exc
+
+    logger.info(
+        "load probe 完成 scenario=%s elapsed_ms=%.1f documents_scanned=%s pid=%s",
+        result["scenario"],
+        result["elapsed_ms"],
+        result["documents_scanned"],
+        result["pid"],
+    )
+    return {
+        "status": "ok",
+        "result": result,
     }
