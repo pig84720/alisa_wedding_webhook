@@ -32,12 +32,12 @@ jobs:
       - name: Write GCP service account credentials
         run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > serviceAccount.json
 
-      # 5. 部署到 Azure App Service
-      #    在 GitHub → Settings → Secrets 新增 AZURE_WEBAPP_PUBLISH_PROFILE
+      # 5. 部署到 Azure App Service（Korea Central）
+      #    在 GitHub → Settings → Secrets 新增 AZURE_WEBAPP_PUBLISH_PROFILE_KOREA
       #    值從 Azure Portal → 你的 Web App → 概觀 → 「取得發行設定檔」下載
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{ vars.AZURE_WEBAPP_NAME }}   # 在 GitHub Variables 設定
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          app-name: ${{ vars.AZURE_WEBAPP_NAME_KOREA }}   # 在 GitHub Variables 設定
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE_KOREA }}
           package: .
