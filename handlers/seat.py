@@ -63,8 +63,7 @@ class SeatCacheEntry:
 class SeatGroup:
     """同一個正規化姓名群組的座位資料。"""
     normalized_name: str
-    display_names: tuple[str, ...]
-    table: int | str | None
+    entries: tuple[SeatCacheEntry, ...]
     syllables: tuple[str, ...]
 
 
@@ -118,17 +117,6 @@ def normalize_guest_name(name: str) -> str:
             break
         normalized = removed_digits.strip()
     return normalized
-
-
-def strip_guest_note(name: str) -> str:
-    """移除姓名尾端備註，但保留數字尾碼供輸出分組使用。"""
-    stripped = "".join(name.strip().split())
-    while True:
-        updated = TRAILING_NOTE_PATTERN.sub("", stripped)
-        if updated == stripped:
-            break
-        stripped = updated.strip()
-    return stripped
 
 
 def _pinyin_position_score(query: str, candidate: str) -> float:
@@ -188,13 +176,92 @@ def _combined_score_cached(
     return 0.35 * score_char + 0.65 * score_pinyin
 
 
-def format_seat_result_text(display_names: tuple[str, ...], table: int | str | None) -> str:
-    """格式化桌位查詢回覆文字。"""
-    if len(display_names) == 1:
-        return f"{display_names[0]} 的座位 在第{table}桌"
+def _table_sort_key(table: int | str | None) -> tuple[int, object]:
+    """讓桌號輸出順序穩定：數字桌先依數字排序，其餘依字串排序。"""
+    if isinstance(table, int):
+        return (0, table)
 
-    joined_names = "、".join(display_names)
-    return f"以下賓客的座位都在第{table}桌：\n{joined_names}"
+    if table in (None, ""):
+        return (2, "")
+
+    table_text = str(table)
+    if table_text.isdigit():
+        return (0, int(table_text))
+    return (1, table_text)
+
+
+def _format_table_reference(table: int | str | None) -> str:
+    """將桌號格式化為可讀文字。"""
+    if table in (None, ""):
+        return "未安排桌次"
+    return f"第{table}桌"
+
+
+def _dedupe_entries(entries: tuple[SeatCacheEntry, ...]) -> tuple[SeatCacheEntry, ...]:
+    """去除重複的姓名 / 桌號組合，避免重複輸出。"""
+    seen: set[tuple[str, int | str | None]] = set()
+    deduped: list[SeatCacheEntry] = []
+    for entry in sorted(entries, key=lambda item: (_table_sort_key(item.table), item.raw_name)):
+        entry_key = (entry.raw_name, entry.table)
+        if entry_key in seen:
+            continue
+        seen.add(entry_key)
+        deduped.append(entry)
+    return tuple(deduped)
+
+
+def _group_entries_by_table(
+    entries: tuple[SeatCacheEntry, ...],
+) -> list[tuple[int | str | None, tuple[SeatCacheEntry, ...]]]:
+    """將座位結果依桌號分組，保留完整 Firestore 姓名。"""
+    grouped: dict[int | str | None, list[SeatCacheEntry]] = {}
+    for entry in _dedupe_entries(entries):
+        grouped.setdefault(entry.table, []).append(entry)
+
+    return [
+        (table, tuple(grouped[table]))
+        for table in sorted(grouped, key=_table_sort_key)
+    ]
+
+
+def format_seat_result_text(entries: tuple[SeatCacheEntry, ...]) -> str:
+    """格式化桌位查詢回覆文字。"""
+    grouped_entries = _group_entries_by_table(entries)
+    if not grouped_entries:
+        return "查無座位資訊，請洽詢現場工作人員 🙏"
+
+    if len(grouped_entries) == 1 and len(grouped_entries[0][1]) == 1:
+        table, members = grouped_entries[0]
+        return f"{members[0].raw_name} 的座位 在{_format_table_reference(table)}"
+
+    if len(grouped_entries) == 1:
+        table, members = grouped_entries[0]
+        joined_names = "、".join(entry.raw_name for entry in members)
+        return f"以下賓客的座位都在{_format_table_reference(table)}：\n{joined_names}"
+
+    lines = ["查到以下座位資訊："]
+    for table, members in grouped_entries:
+        joined_names = "、".join(entry.raw_name for entry in members)
+        lines.append(f"{_format_table_reference(table)}：{joined_names}")
+    return "\n".join(lines)
+
+
+def format_seat_confirm_text(entries: tuple[SeatCacheEntry, ...]) -> str:
+    """格式化模糊比對確認訊息，保留完整 Firestore 姓名。"""
+    grouped_entries = _group_entries_by_table(entries)
+    if not grouped_entries:
+        return "請回覆「是」確認，或重新輸入姓名"
+
+    if len(grouped_entries) == 1 and len(grouped_entries[0][1]) == 1:
+        _, members = grouped_entries[0]
+        return f"您是指 {members[0].raw_name} 嗎？\n請回覆「是」確認，或重新輸入姓名"
+
+    lines = ["您是指以下賓客嗎？"]
+    for table, members in grouped_entries:
+        joined_names = "、".join(entry.raw_name for entry in members)
+        lines.append(f"{_format_table_reference(table)}：{joined_names}")
+    lines.append("請回覆「是」確認，或重新輸入姓名")
+    return "\n".join(lines)
 
 
 async def refresh_seat_cache(force: bool = False) -> SeatCacheSnapshot:
@@ -248,20 +315,22 @@ async def refresh_seat_cache(force: bool = False) -> SeatCacheSnapshot:
         normalized_name_index: dict[str, SeatGroup] = {}
 
         for normalized_name, member_entries in group_members.items():
-            ordered_member_entries = tuple(sorted(member_entries, key=lambda item: item.raw_name))
-            display_names = tuple(
-                dict.fromkeys(strip_guest_note(entry.raw_name) for entry in ordered_member_entries)
+            ordered_member_entries = tuple(
+                sorted(
+                    member_entries,
+                    key=lambda item: (_table_sort_key(item.table), item.raw_name),
+                )
             )
             group = SeatGroup(
                 normalized_name=normalized_name,
-                display_names=display_names,
-                table=ordered_member_entries[0].table,
+                entries=ordered_member_entries,
                 syllables=ordered_member_entries[0].syllables,
             )
             groups.append(group)
             normalized_name_index[normalized_name] = group
             for entry in ordered_member_entries:
-                exact_name_index[entry.raw_name] = group
+                compact_raw_name = "".join(entry.raw_name.strip().split())
+                exact_name_index[compact_raw_name] = group
 
         _seat_cache = SeatCacheSnapshot(
             entries=tuple(entries),
@@ -308,7 +377,7 @@ async def find_best_seat_match(query_name: str) -> SeatMatchResult | None:
         return SeatMatchResult(
             group=normalized_group,
             best_score=100.0,
-            documents_scanned=len(normalized_group.display_names),
+            documents_scanned=len(normalized_group.entries),
         )
 
     query_syllables = tuple(_syllables(normalized_query_name))
@@ -481,15 +550,18 @@ async def _search_seat(
 
         matched_group = match_result.group
         matched_name = matched_group.normalized_name
-        matched_table = matched_group.table
+        matched_entries = matched_group.entries
         best_score = match_result.best_score
 
         logger.info(
-            "座位比對結果 best_match=%s variants=%d score=%.1f table=%s scanned=%d %s",
+            "座位比對結果 best_match=%s variants=%d tables=%s score=%.1f scanned=%d %s",
             matched_name,
-            len(matched_group.display_names),
+            len(_dedupe_entries(matched_entries)),
+            ",".join(
+                _format_table_reference(table)
+                for table, _ in _group_entries_by_table(matched_entries)
+            ),
             best_score,
-            matched_table,
             match_result.documents_scanned,
             format_log_context(reply_context),
         )
@@ -500,8 +572,12 @@ async def _search_seat(
         if normalized_query_name == matched_name:
             await _reply_seat_result(
                 line_bot_api, reply_token,
-                format_seat_result_text(matched_group.display_names, matched_table),
-                context={**reply_context, "matched_name": matched_name, "table": matched_table},
+                format_seat_result_text(matched_entries),
+                context={
+                    **reply_context,
+                    "matched_name": matched_name,
+                    "table_count": len(_group_entries_by_table(matched_entries)),
+                },
             )
             await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
 
@@ -511,13 +587,17 @@ async def _search_seat(
                 {
                     "state": "pending_confirm",
                     "pending_name": matched_name,
-                    "pending_table": matched_table,
+                    "pending_lookup_key": matched_name,
                 }
             )
             await _reply_text(
                 line_bot_api, reply_token,
-                f"您是指 {matched_name} 嗎？\n請回覆「是」確認，或重新輸入姓名",
-                context={**reply_context, "matched_name": matched_name, "table": matched_table},
+                format_seat_confirm_text(matched_entries),
+                context={
+                    **reply_context,
+                    "matched_name": matched_name,
+                    "table_count": len(_group_entries_by_table(matched_entries)),
+                },
             )
 
         else:
@@ -542,31 +622,38 @@ async def _confirm_seat(
 ) -> None:
     """使用者確認模糊比對結果，回傳暫存的桌號並清除狀態"""
     db = get_db()
-    pending_name = state_data.get("pending_name", "")
-    pending_table = state_data.get("pending_table", "")
-    match_result = await find_best_seat_match(pending_name)
-    display_names = (
-        match_result.group.display_names
-        if match_result is not None
-        else (pending_name,)
-    )
+    pending_lookup_key = state_data.get("pending_lookup_key") or state_data.get("pending_name", "")
+    match_result = await find_best_seat_match(pending_lookup_key)
+
+    if match_result is None:
+        await _reply_text(
+            line_bot_api,
+            reply_token,
+            "抱歉，座位資料剛更新，請重新查詢姓名 🔍",
+            context={**(context or {}), "handler": "seat_confirm_missing_match", "user_id": user_id},
+        )
+        await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
+        return
 
     await _reply_seat_result(
         line_bot_api, reply_token,
-        format_seat_result_text(display_names, pending_table),
+        format_seat_result_text(match_result.group.entries),
         context={
             **(context or {}),
             "handler": "seat_confirm",
             "user_id": user_id,
-            "matched_name": pending_name,
-            "table": pending_table,
+            "matched_name": pending_lookup_key,
+            "table_count": len(_group_entries_by_table(match_result.group.entries)),
         },
     )
     await db.collection(COLLECTION_USER_STATES).document(user_id).delete()
     logger.info(
-        "seat_confirm handler 執行完成 user_id=%s table=%s",
+        "seat_confirm handler 執行完成 user_id=%s tables=%s",
         user_id,
-        pending_table,
+        ",".join(
+            _format_table_reference(table)
+            for table, _ in _group_entries_by_table(match_result.group.entries)
+        ),
     )
 
 
