@@ -412,16 +412,14 @@ async def handle_seat_start(
     """
     reply_context = {**(context or {}), "handler": "seat_start", "user_id": user_id}
     logger.info("進入 seat_start handler %s", format_log_context(reply_context))
-    # 暫時關閉開放日期限制，方便測試桌位查詢功能。
-    # 測試完成後若要恢復，取消以下區塊註解即可。
-    # if datetime.now(tz=_TW) < RELEASE_DATE:
-    #     await safe_reply_message(
-    #         line_bot_api,
-    #         reply_token=reply_token,
-    #         messages=[TextMessage(text=NOT_YET_MSG)],
-    #         context=reply_context,
-    #     )
-    #     return
+    if datetime.now(tz=_TW) < RELEASE_DATE:
+        await safe_reply_message(
+            line_bot_api,
+            reply_token=reply_token,
+            messages=[TextMessage(text=NOT_YET_MSG)],
+            context=reply_context,
+        )
+        return
 
     db = get_db()
 
