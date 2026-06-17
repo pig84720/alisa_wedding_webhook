@@ -45,6 +45,7 @@ THRESHOLD_CONFIRM = 60
 
 # 桌位圖片 URL（回傳桌號時一併附上）
 SEAT_MAP_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/13F%E6%A0%BC%E8%90%8A_43T-01.jpg?alt=media&token=2b73a952-8054-47a2-8bb1-d99cb773836f"
+SEAT_MAP_DETAIL_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/S__120242179.jpg?alt=media&token=00be8cb1-80c7-4ba4-a5e7-c13ec0ea4766"
 SEAT_CACHE_TTL_SECONDS = 900
 TRAILING_NOTE_PATTERN = re.compile(r"\s*[（(][^)）]*[)）]\s*$")
 TRAILING_DIGITS_PATTERN = re.compile(r"\s*\d+\s*$")
@@ -670,6 +671,10 @@ async def _reply_seat_result(
             ImageMessage(
                 original_content_url=SEAT_MAP_URL,
                 preview_image_url=SEAT_MAP_URL,
+            ),
+            ImageMessage(
+                original_content_url=SEAT_MAP_DETAIL_URL,
+                preview_image_url=SEAT_MAP_DETAIL_URL,
             ),
         ],
         context=context,

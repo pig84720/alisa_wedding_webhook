@@ -19,23 +19,51 @@ import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-EXCEL_PATH = "婚禮桌位圖_範例.xlsx"
+EXCEL_PATH = "LINE官方使用-桌位表.xlsx"
 SERVICE_ACCOUNT_KEY = "../serviceAccount.json"
+
+
+def _normalize_table_id(cell_value, column_number: int) -> int:
+    """桌號必須完全以 Excel 第一列為準；缺值或格式錯誤直接報錯。"""
+    if not pd.notna(cell_value):
+        raise ValueError(f"Excel 第 1 列第 {column_number} 欄缺少桌號，請先補齊後再匯入")
+
+    text = str(cell_value).strip()
+    if not text:
+        raise ValueError(f"Excel 第 1 列第 {column_number} 欄桌號為空白，請先補齊後再匯入")
+
+    try:
+        return int(float(text))
+    except ValueError as exc:
+        raise ValueError(
+            f"Excel 第 1 列第 {column_number} 欄桌號 '{text}' 不是有效整數，請修正後再匯入"
+        ) from exc
+
+
+def _normalize_table_name(table_id: int, raw_table_name) -> str:
+    """空白桌名不要存成 nan；若未命名則用桌號產生可讀名稱。"""
+    if pd.notna(raw_table_name):
+        table_name = str(raw_table_name).strip()
+        if table_name and table_name.lower() != "nan":
+            return table_name
+    return f"第{table_id}桌"
 
 
 def load_seating_data(path: str) -> tuple[list[dict], list[dict]]:
     df = pd.read_excel(path, header=None)
 
+    # iloc[0, 1:] → 真實桌號（1, 2, 3, ...）
     # iloc[1, 1:] → 實際桌位名稱（主桌, 雙連教會1, ...）
     # iloc[2:, 1:] → 賓客資料
+    table_ids = df.iloc[0, 1:]
     table_names = df.iloc[1, 1:]
-    guest_rows  = df.iloc[2:, 1:]
+    guest_rows = df.iloc[2:, 1:]
 
     tables, guests = [], []
 
-    for col_offset, table_name in enumerate(table_names):
-        table_id       = col_offset          # 0 = 主桌, 1 = 第1桌, ...
-        table_name_str = str(table_name).strip()
+    for col_offset, (table_id_cell, table_name) in enumerate(zip(table_ids, table_names)):
+        table_id = _normalize_table_id(table_id_cell, col_offset + 2)
+        table_name_str = _normalize_table_name(table_id, table_name)
 
         col_guests = [
             str(name).strip()
