@@ -13,7 +13,8 @@ db = firestore.client()
 
 data = {
     "ceremony_images": [
-        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/messageImage_1780498164473.jpg?alt=media&token=4ccc160f-066c-49f4-b930-65a89fdf561f",
+        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/%E5%84%80%E7%AF%80%E8%A1%A8%E6%9B%B4%E6%96%B0P1.jpg?alt=media&token=eeb38748-6eb4-49cb-aa94-d4dba18f14fb",
+        "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/%E5%84%80%E7%AF%80%E8%A1%A8%E6%9B%B4%E6%96%B0P2.jpg?alt=media&token=f5d70b2b-bee8-48f0-a58b-0140bde9b844",
     ],
     "church_images": [
         "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/messageImage_1777993364477.jpg?alt=media&token=9664ac3a-f7f7-492c-9023-59c44399b195",
