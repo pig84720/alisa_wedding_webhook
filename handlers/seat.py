@@ -45,7 +45,7 @@ THRESHOLD_CONFIRM = 60
 
 # 桌位圖片 URL（回傳桌號時一併附上）
 SEAT_MAP_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/13F%E6%A0%BC%E8%90%8A_43T-01.jpg?alt=media&token=2b73a952-8054-47a2-8bb1-d99cb773836f"
-SEAT_MAP_DETAIL_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/line%E5%AE%98%E6%96%B9%E5%B0%88%E7%94%A8%E6%A1%8C%E4%BD%8D%E5%9C%96(0624).PNG?alt=media&token=0e72ab81-150b-455c-a67d-49448366824c"
+SEAT_MAP_DETAIL_URL = "https://firebasestorage.googleapis.com/v0/b/alisa-wedding.firebasestorage.app/o/line%E5%AE%98%E6%96%B9%E5%B0%88%E7%94%A8%E6%A1%8C%E4%BD%8D%E5%9C%96(0626).PNG?alt=media&token=21c9479d-3814-4d2b-bd8e-a960368ccd0b"
 SEAT_CACHE_TTL_SECONDS = 900
 TRAILING_NOTE_PATTERN = re.compile(r"\s*[（(][^)）]*[)）]\s*$")
 TRAILING_DIGITS_PATTERN = re.compile(r"\s*\d+\s*$")
